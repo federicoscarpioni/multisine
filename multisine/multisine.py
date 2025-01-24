@@ -44,13 +44,21 @@ def show_extracted_amplitude_from_experiment(impedance_experiment,
 
 class Multisine:
     
-    def __init__(self, sampling_frequency, frequencies, amplitudes, phases = None):
+    def __init__(self, sampling_frequency, frequencies, amplitudes, phases = None, number_points=None):
+        self.sampling_frequency = sampling_frequency
         self.frequencies = frequencies
         self.amplitudes = amplitudes
-        if phases == None : self.phases = np.zeros(frequencies.size) #else phases
-        self.sampling_frequency = sampling_frequency
+        if phases is None:
+            self.phases = np.zeros(frequencies.size)
+        else:
+            self.phases = phases
+        if number_points is None:
+            self.number_points = self.sampling_frequency/self.frequencies[0]
+        else:
+            self.number_points = number_points
         self.waveform = self.compute_multisine(self.phases)
         self.cf = compute_crest_factor(self.waveform)
+        self.is_normalized = False
         print(f"Multisine generated. Crest factor: {self.cf:.4}")
     
 
@@ -58,10 +66,10 @@ class Multisine:
         return np.random.random(self.frequencies.size) * 2 * np.pi
 
     
-    def compute_multisine(self, phases):
+    def compute_multisine(self, phases, time_step = None):
         # Time array
-        number_points = self.sampling_frequency/self.frequencies[0]
-        self.time = np.arange(number_points) / self.sampling_frequency
+        
+        self.time = np.arange(self.number_points) / self.sampling_frequency
         # Compute multisine
         multisine = np.zeros(self.time.size)
         for i in range(0, self.frequencies.size):
@@ -72,8 +80,11 @@ class Multisine:
         return multisine
     
     
-    def normalize_waveform(self):
+    def normalize_waveform(self, factor =1):
         self.waveform = np.divide(self.waveform, max(abs(self.waveform)))
+        self.waveform = np.multiply(self.waveform, factor)
+        self.is_normalized = True
+        self.normalization_factor = factor
             
 
     def best_random_phases(self, iteration):
@@ -234,6 +245,11 @@ class Multisine:
                     'Frequencies / Hz' : self.frequencies.tolist(),
                     'Amplitudes / mV' : self.amplitudes.tolist(),
                     'Phases / rad' : self.phases.tolist()}
+        if self.is_normalized: 
+            metadata['Normalized'] = 'Yes' 
+            metadata['Normalization factor'] = self.normalization_factor
+        else: 
+            metadata['Normalized'] = 'No' 
         # Save to json file
         with open(name + '/waveform_metadata.json', 'w') as jfile:
             json.dump(metadata, jfile)

@@ -12,23 +12,13 @@ frequencies[-1] = max_frequency
 
 amplitudes = np.ones(frequencies.size)*1  # V
 sampling_frequency = 10000
-<<<<<<< Updated upstream
-ms1 = Multisine(sampling_frequency, frequencies, amplitudes)
-=======
 ms1 = Multisine(sampling_frequency, frequencies, amplitudes,)
 ms1.best_random_phases(500)
 ms1.normalize_waveform(int(2**16 /2 - 1))
->>>>>>> Stashed changes
 ms1.plot('voltage')
 ms1.fourier_analysis(10)
 ms1.plot_dft((0.001,sampling_frequency//2))
 # ms1.plot_phase((0.1,250))
-<<<<<<< Updated upstream
-ms1.best_random_phases(100)
-ms1.normalize_waveform()
-ms1.save('E:/multisine_collection/2409131232multisine_1kHz-100mHz_8ptd_fgen10kHz_random_phases_flat_normalized')
-=======
-
 ms1.save('C:/multisine_collection/2412161033_signle_sine_1Hz')
 
 #%% Split the multisine in two
@@ -66,4 +56,3 @@ for i in range(0,msfirst.waveform.size):
 
 cf_mstotal = compute_crest_factor(mstotal)
 cf_mstotal
->>>>>>> Stashed changes

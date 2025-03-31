@@ -19,6 +19,10 @@ ms1.plot('voltage')
 ms1.fourier_analysis(10)
 ms1.plot_dft((0.001,sampling_frequency//2))
 # ms1.plot_phase((0.1,250))
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
 ms1.save('C:/multisine_collection/2412161033_signle_sine_1Hz')
 
 #%% Split the multisine in two

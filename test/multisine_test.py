@@ -18,6 +18,8 @@ ms1.normalize_waveform(int(2**16 /2 - 1))
 ms1.plot('voltage')
 ms1.fourier_analysis(10)
 ms1.plot_dft((0.001,sampling_frequency//2))
+ms1.fourier_analysis(10)
+ms1.plot_dft((0.001,sampling_frequency//2))
 # ms1.plot_phase((0.1,250))
 <<<<<<< Updated upstream
 =======

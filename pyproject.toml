@@ -1,0 +1,17 @@
+[project]
+name = "multisine"
+version = "0.1.0"
+description = "Design multisines for system identification in Python."
+authors = [
+    {name = "Federico Scarpioni", email = "federicoscarpioni@gmail.com"},
+]
+maintainers = [
+    {name = "Federico Scarpioni", email = "federicoscarpioni@gmail.com"},
+]
+readme = "README.md"
+dependencies = [
+    "numpy",
+    "matplotlib",
+]
+license = "MIT"
+license-files = ["LICENSE"]

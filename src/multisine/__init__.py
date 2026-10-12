@@ -9,6 +9,9 @@ from galvani import BioLogic
 import pandas as pd
 
 from .phase_optim import optimize_phases_crest_continuation
+from .harmonics_gen import (
+    odd_quasilog, odd_random_grid, unexcited_odd_harmonics, describe_grid,
+)
 
 
 
@@ -58,6 +61,10 @@ def load_multisine(path: str):
         np.array(data['Phases / rad']),
     )
     ms.is_normalized = True
+    ms.phase_policy = data.get('Phase policy', 'unknown')
+    if 'Harmonics' in data:
+        ms.harmonics = np.array(data['Harmonics'], dtype=int)
+    ms.orp = data.get('ORP design')
     return ms
 
 class Multisine:
@@ -78,8 +85,92 @@ class Multisine:
         self.cf = compute_crest_factor(self.waveform)
         self.is_normalized = False
         self.period = int(self.number_points/self.sampling_frequency)
+        self.harmonics = None
+        self.phase_policy = 'given' if phases is not None else 'zero'
+        self.orp = None
         print(f"Multisine generated. Crest factor: {self.cf:.4}")
-    
+
+
+    @classmethod
+    def generate_orp(cls, sampling_frequency, f0, h_max, amplitude=1.0,
+                     L=5, harmonics=None, seed=None, number_points=None):
+        '''
+        Build an odd random phase multisine, ready for BLTVA analysis.
+
+        Bundles the three things the method needs together, because they are
+        only correct together:
+
+        1. an odd-only harmonic grid, so even-order distortion lands on empty
+           even harmonics;
+        2. odd harmonics deliberately left unexcited, so odd-order distortion
+           has somewhere to appear;
+        3. phases drawn uniformly at random, which is what makes the best
+           linear approximation well defined and the distortion estimate
+           meaningful.
+
+        Parameters
+        ----------
+        sampling_frequency : float
+            Generation rate in Hz.
+        f0 : float
+            Fundamental, i.e. 1/period. Harmonic h sits at ``h * f0``.
+        h_max : int
+            Highest harmonic to excite.
+        amplitude : float or array
+            Per-tone amplitude. A scalar is applied to every tone.
+        L : int
+            Group size for the dense construction: one odd harmonic in every
+            L is dropped (Hallemans TIM 2021, Definition 1). Ignored when
+            ``harmonics`` is given.
+        harmonics : array of int, optional
+            Use this grid instead of building a dense one -- for a sparse
+            quasi-logarithmic grid from :func:`odd_quasilog`, say. On a sparse
+            grid no omission is needed: almost every odd harmonic is already
+            unexcited, which serves the same purpose as the L-grouping.
+        seed : int, optional
+            Seeds both the harmonic omission and the phases, so the whole
+            excitation is reproducible from this one number.
+
+        Warning
+        -------
+        Do **not** follow this with :meth:`optimize_crest_factor` or
+        :meth:`best_random_phases` if you intend to estimate nonlinear
+        distortion. Both replace the phases with a set chosen for low crest
+        factor, which is no longer a uniform random draw, and the theory
+        behind the distortion estimate no longer holds. Nothing downstream can
+        detect this from the recorded data -- the distortion variances would
+        simply be wrong rather than absent. Choose one: a low crest factor, or
+        a trustworthy distortion estimate.
+        '''
+        rng = np.random.default_rng(seed)
+        dense = harmonics is None
+        if dense:
+            harmonics = odd_random_grid(h_max, L=L, seed=seed)
+        else:
+            harmonics = np.asarray(harmonics, dtype=int)
+            harmonics = harmonics[harmonics <= h_max]
+
+        report = describe_grid(harmonics)
+        if not report['supports_distortion_estimate']:
+            raise ValueError(
+                f'this grid cannot support a distortion estimate: {report}. '
+                'Excite odd harmonics only, and leave some of them unexcited.')
+
+        frequencies = harmonics * float(f0)
+        if np.ndim(amplitude) == 0:
+            amplitudes = np.full(frequencies.size, float(amplitude))
+        else:
+            amplitudes = np.asarray(amplitude, dtype=float)
+        phases = rng.uniform(0, 2 * np.pi, frequencies.size)
+
+        obj = cls(sampling_frequency, frequencies, amplitudes, phases,
+                  number_points)
+        obj.harmonics = harmonics
+        obj.phase_policy = 'uniform_random'
+        obj.orp = {'grid': 'dense_L_grouped' if dense else 'supplied',
+                   'L': L if dense else None, 'seed': seed, **report}
+        return obj
+
     def compute_crest_factor(self):
         self.cf = compute_crest_factor(self.waveform)
 
@@ -119,6 +210,7 @@ class Multisine:
                 self.phases = new_phases
                 self.waveform = new_waveform
                 self.cf = new_cf
+                self._phases_no_longer_random('best_of_random')
                 print(f"Current minimum: {self.cf:.4}")
         print(f"Current minimum crest factore: {self.cf:.4}")
 
@@ -144,7 +236,26 @@ class Multisine:
             self.phases = new_phases
             self.waveform = new_waveform
             self.cf = new_cf
+            self._phases_no_longer_random('crest_optimized')
         print(f"Current minimum crest factor: {self.cf:.4}")
+
+
+    def _phases_no_longer_random(self, policy):
+        '''
+        Record that the phases are no longer a uniform random draw.
+
+        The distortion estimate of an ORP measurement rests on the phases
+        being drawn independently and uniformly, so that E{exp(j*phi)} = 0.
+        Choosing phases for a low crest factor breaks that, and no downstream
+        tool can detect it from the recorded waveform. Saying so in the
+        metadata is the only way the information survives to analysis time.
+        '''
+        was_orp = self.phase_policy == 'uniform_random'
+        self.phase_policy = policy
+        if was_orp:
+            print('Note: phases are no longer a uniform random draw, so this '
+                  'is no longer an ORP excitation. Nonlinear distortion '
+                  'estimates from it will not be trustworthy.')
 
 
     def plot(self, signal_type):
@@ -290,11 +401,20 @@ class Multisine:
                     'Frequencies / Hz' : self.frequencies.tolist(),
                     'Amplitudes / mV' : self.amplitudes.tolist(),
                     'Phases / rad' : self.phases.tolist()}
-        if self.is_normalized: 
-            metadata['Normalized'] = 'Yes' 
+        if self.is_normalized:
+            metadata['Normalized'] = 'Yes'
             metadata['Normalization factor'] = self.normalization_factor
-        else: 
-            metadata['Normalized'] = 'No' 
+        else:
+            metadata['Normalized'] = 'No'
+        # Provenance of the excitation design. The harmonic numbers and the
+        # phase policy are what an analysis tool needs in order to know
+        # whether a nonlinear distortion estimate is defensible, and neither
+        # can be recovered by inspecting the waveform after the fact.
+        metadata['Phase policy'] = self.phase_policy
+        if self.harmonics is not None:
+            metadata['Harmonics'] = np.asarray(self.harmonics).tolist()
+        if self.orp is not None:
+            metadata['ORP design'] = self.orp
         # Save to json file
         with open(name + '/waveform_metadata.json', 'w') as jfile:
             json.dump(metadata, jfile)

@@ -2,11 +2,15 @@ import numpy as np
 import matplotlib.pyplot as plt
 from math import ceil
 from scipy.fft import fft,fftshift,fftfreq
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import CubicSpline, UnivariateSpline
 import os
 import json
 from galvani import BioLogic
 import pandas as pd
+
+from .phase_optim import optimize_phases_crest_continuation
+
+
 
 
 # Auxiliary functions
@@ -19,13 +23,15 @@ def load_eclab_impedance(file_name):
     df = pd.DataFrame(mpr_file.data)
     return df
 
+
 def amplitude_extraction_from_experiment(impedance_experiment, 
                                          frequencies_experiment, 
                                          frequencies_desired):
     amplitude_experiment = np.absolute(impedance_experiment)
-    cubic_spline = CubicSpline(np.flip(frequencies_experiment), 
-                               np.flip(amplitude_experiment))
+    cubic_spline = CubicSpline(frequencies_experiment, 
+                               amplitude_experiment)
     return cubic_spline(frequencies_desired)
+
 
 def show_extracted_amplitude_from_experiment(impedance_experiment, 
                                          frequencies_experiment, 
@@ -40,7 +46,19 @@ def show_extracted_amplitude_from_experiment(impedance_experiment,
     fig.legend()
     ax.set_xlabel('Frequency / Hz')
     ax.set_ylabel('Module of Z')
-    
+
+
+def load_multisine(path: str):
+    with open(path+'/waveform_metadata.json') as file:
+        data = json.load(file)
+    ms = Multisine(
+        data['Generation frequency / Hz'],
+        np.array(data['Frequencies / Hz']),
+        np.array(data['Amplitudes / mV']),
+        np.array(data['Phases / rad']),
+    )
+    ms.is_normalized = True
+    return ms
 
 class Multisine:
     
@@ -59,8 +77,11 @@ class Multisine:
         self.waveform = self.compute_multisine(self.phases)
         self.cf = compute_crest_factor(self.waveform)
         self.is_normalized = False
+        self.period = int(self.number_points/self.sampling_frequency)
         print(f"Multisine generated. Crest factor: {self.cf:.4}")
     
+    def compute_crest_factor(self):
+        self.cf = compute_crest_factor(self.waveform)
 
     def random_phases(self):
         return np.random.random(self.frequencies.size) * 2 * np.pi
@@ -88,7 +109,7 @@ class Multisine:
             
 
     def best_random_phases(self, iteration):
-        print('Randomizing phase for minimu crest factor...')
+        print('Randomizing phase for minimum crest factor...')
         for i in range(iteration):
             new_phases = self.random_phases()
             new_waveform = self.compute_multisine(new_phases)
@@ -100,8 +121,31 @@ class Multisine:
                 self.cf = new_cf
                 print(f"Current minimum: {self.cf:.4}")
         print(f"Current minimum crest factore: {self.cf:.4}")
-                
-                
+
+
+    def optimize_crest_factor(self, p_schedule=(2, 4, 8, 16, 32), **minimize_kwargs):
+        '''
+        Minimize crest factor by optimizing phases, starting from a
+        random phase guess. Uses a smooth Lp-norm surrogate for the peak
+        (see phase_optim.py), with p ramped up over p_schedule.
+        '''
+        print('Optimizing phases for minimum crest factor...')
+        phase0 = self.random_phases()
+        result = optimize_phases_crest_continuation(
+            self.frequencies, self.amplitudes, phase0,
+            self.sampling_frequency, self.number_points,
+            p_schedule=p_schedule, **minimize_kwargs,
+        )
+        new_phases = result.x
+        new_waveform = self.compute_multisine(new_phases)
+        new_cf = compute_crest_factor(new_waveform)
+        print(f"Calculated from optimized phases: {new_cf:.4}")
+        if new_cf < self.cf:
+            self.phases = new_phases
+            self.waveform = new_waveform
+            self.cf = new_cf
+        print(f"Current minimum crest factor: {self.cf:.4}")
+
 
     def plot(self, signal_type):
         if signal_type == 'current':
@@ -150,7 +194,7 @@ class Multisine:
         plt.xscale('log')
         plt.ylim((-1,1))
         plt.xlabel('Frequency / Hz')
-        plt.ylabel('Phase / $\pi$')
+        plt.ylabel('Phase / \pi')
     
     def plot_phase_full(self, tollerance =1e-6):
         # Clean the matematical error
@@ -163,7 +207,7 @@ class Multisine:
         # plt.yscale('log')
         plt.ylim((-1,1))
         plt.xlabel('Frequency / Hz')
-        plt.ylabel('Phase / $\pi$')
+        plt.ylabel('Phase / \pi')
         
     def plot_phase2(self):
         plt.figure()
@@ -236,12 +280,13 @@ class Multisine:
         Save metadata as a dictionary in a json file.
         '''
         # Create a dictionary with all metadata
-        metadata = {'Multisine period / s' : 1/self.frequencies[0],
-                    'Sample frequency / Hz': self.sampling_frequency,
-                    'Lower frequency / Hz': self.frequencies[0],
-                    'Higher frequency / Hz': self.frequencies[-1],
+        metadata = {'Period / s' : self.period,
+                    'Generation frequency / Hz': self.sampling_frequency,
+                    'Lowest frequency / Hz': self.frequencies[0],
+                    'Highest frequency / Hz': self.frequencies[-1],
                     'Number of frequencies' : self.frequencies.size,
                     'Crest factor': self.cf,
+                    'Number of points': self.waveform.size,
                     'Frequencies / Hz' : self.frequencies.tolist(),
                     'Amplitudes / mV' : self.amplitudes.tolist(),
                     'Phases / rad' : self.phases.tolist()}
